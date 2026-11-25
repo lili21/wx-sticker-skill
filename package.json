@@ -1,0 +1,13 @@
+{
+  "name": "wx-sticker-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Antigravity skill for preparing and submitting sticker albums to WeChat Sticker Open Platform.",
+  "scripts": {
+    "pack": "node skills/wechat-sticker-publish/scripts/build-pack.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.34.5"
+  }
+}
