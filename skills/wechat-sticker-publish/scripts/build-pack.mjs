@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * WeChat Sticker Open Platform Pack Builder & Verifier
+ * WeChat Sticker Open Platform Pack Builder & Verifier (Agent-Agnostic CLI)
  *
  * Subcommands:
  *   stickers     Resize 8-24 source images to 240x240 PNG (auto contain/cover)
  *   transparent  Build complete pack from transparent RGBA PNG stickers (de-text, de-border, compose)
+ *   generate     Generate raw auxiliary images via OpenAI or OpenRouter API (for opaque photo packs)
  *   chroma       Build cover/icon via soft green-screen chroma-key + resize opaque banner/appreciation images
  *   verify       Validate pack dimensions, formats, file sizes, and transparency rules
  */
@@ -43,7 +44,7 @@ function listImages(dir) {
 }
 
 async function isCornerTransparent(filePath) {
-  const { data, info } = await sharp(filePath)
+  const { data } = await sharp(filePath)
     .ensureAlpha()
     .resize(32, 32, { fit: "fill" })
     .raw()
@@ -284,91 +285,95 @@ async function extractCleanCutout(srcPath, options = {}) {
 
 /**
  * Soft chroma-key matte + foreground color unmix + edge despill for green-screen (#00FF00) raw images.
+ * If the input image already has genuine corner transparency, preserves its existing alpha channel cleanly.
  */
 async function softChromaKeyPng(inputPath, outPath, targetSize, marginRatio = 0.04) {
+  const alreadyTransparent = await isCornerTransparent(inputPath);
   const { data, info } = await sharp(inputPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const { width, height } = info;
   const buf = Buffer.from(data);
   const n = width * height;
 
-  let kr = 0, kg = 0, kb = 0, kCount = 0;
-  for (const [ox, oy] of [[0, 0], [width - 16, 0], [0, height - 16], [width - 16, height - 16]]) {
-    for (let y = oy; y < oy + 16; y += 1) {
-      for (let x = ox; x < ox + 16; x += 1) {
-        const i = (y * width + x) * 4;
-        kr += buf[i]; kg += buf[i + 1]; kb += buf[i + 2]; kCount += 1;
+  if (!alreadyTransparent) {
+    let kr = 0, kg = 0, kb = 0, kCount = 0;
+    for (const [ox, oy] of [[0, 0], [width - 16, 0], [0, height - 16], [width - 16, height - 16]]) {
+      for (let y = oy; y < oy + 16; y += 1) {
+        for (let x = ox; x < ox + 16; x += 1) {
+          const i = (y * width + x) * 4;
+          kr += buf[i]; kg += buf[i + 1]; kb += buf[i + 2]; kCount += 1;
+        }
       }
     }
-  }
-  kr /= kCount; kg /= kCount; kb /= kCount;
+    kr /= kCount; kg /= kCount; kb /= kCount;
 
-  const domAt = (idx) => {
-    const i = idx * 4;
-    return buf[i + 1] - Math.max(buf[i], buf[i + 2]);
-  };
+    const domAt = (idx) => {
+      const i = idx * 4;
+      return buf[i + 1] - Math.max(buf[i], buf[i + 2]);
+    };
 
-  const ext = new Uint8Array(n);
-  const queue = new Int32Array(n);
-  let head = 0, tail = 0;
-  const push = (idx) => {
-    if (ext[idx] || domAt(idx) <= 10) return;
-    ext[idx] = 1;
-    queue[tail++] = idx;
-  };
-  for (let x = 0; x < width; x += 1) { push(x); push((height - 1) * width + x); }
-  for (let y = 0; y < height; y += 1) { push(y * width); push(y * width + width - 1); }
-  while (head < tail) {
-    const idx = queue[head++];
-    const x = idx % width;
-    const y = (idx - x) / width;
-    if (x > 0) push(idx - 1);
-    if (x + 1 < width) push(idx + 1);
-    if (y > 0) push(idx - width);
-    if (y + 1 < height) push(idx + width);
-  }
+    const ext = new Uint8Array(n);
+    const queue = new Int32Array(n);
+    let head = 0, tail = 0;
+    const push = (idx) => {
+      if (ext[idx] || domAt(idx) <= 10) return;
+      ext[idx] = 1;
+      queue[tail++] = idx;
+    };
+    for (let x = 0; x < width; x += 1) { push(x); push((height - 1) * width + x); }
+    for (let y = 0; y < height; y += 1) { push(y * width); push(y * width + width - 1); }
+    while (head < tail) {
+      const idx = queue[head++];
+      const x = idx % width;
+      const y = (idx - x) / width;
+      if (x > 0) push(idx - 1);
+      if (x + 1 < width) push(idx + 1);
+      if (y > 0) push(idx - width);
+      if (y + 1 < height) push(idx + width);
+    }
 
-  let nearExt = Uint8Array.from(ext);
-  for (let step = 0; step < 4; step += 1) {
-    const next = Uint8Array.from(nearExt);
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        const idx = y * width + x;
-        if (nearExt[idx]) continue;
-        if (nearExt[idx - 1] || nearExt[idx + 1] || nearExt[idx - width] || nearExt[idx + width]) next[idx] = 1;
+    let nearExt = Uint8Array.from(ext);
+    for (let step = 0; step < 4; step += 1) {
+      const next = Uint8Array.from(nearExt);
+      for (let y = 1; y < height - 1; y += 1) {
+        for (let x = 1; x < width - 1; x += 1) {
+          const idx = y * width + x;
+          if (nearExt[idx]) continue;
+          if (nearExt[idx - 1] || nearExt[idx + 1] || nearExt[idx - width] || nearExt[idx + width]) next[idx] = 1;
+        }
       }
+      nearExt = next;
     }
-    nearExt = next;
-  }
 
-  const low = 16, high = 105;
-  for (let idx = 0; idx < n; idx += 1) {
-    const i = idx * 4;
-    if (!nearExt[idx]) {
-      buf[i + 3] = 255;
-      continue;
-    }
-    const r = buf[i], g = buf[i + 1], b = buf[i + 2];
-    const dom = g - Math.max(r, b);
-    let alpha = 1;
-    if (ext[idx]) {
-      if (dom >= high) alpha = 0;
-      else if (dom > low) {
-        const t = (dom - low) / (high - low);
-        alpha = 1 - t * t * (3 - 2 * t);
+    const low = 16, high = 105;
+    for (let idx = 0; idx < n; idx += 1) {
+      const i = idx * 4;
+      if (!nearExt[idx]) {
+        buf[i + 3] = 255;
+        continue;
       }
-    }
-    if (alpha <= 0.02) {
-      buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 0;
-    } else {
-      let ur = Math.max(0, Math.min(255, (r - (1 - alpha) * kr) / alpha));
-      let ug = Math.max(0, Math.min(255, (g - (1 - alpha) * kg) / alpha));
-      let ub = Math.max(0, Math.min(255, (b - (1 - alpha) * kb) / alpha));
-      const maxRB = Math.max(ur, ub);
-      if (ug > maxRB) ug = maxRB;
-      buf[i] = Math.round(ur);
-      buf[i + 1] = Math.round(ug);
-      buf[i + 2] = Math.round(ub);
-      buf[i + 3] = Math.round(alpha * 255);
+      const r = buf[i], g = buf[i + 1], b = buf[i + 2];
+      const dom = g - Math.max(r, b);
+      let alpha = 1;
+      if (ext[idx]) {
+        if (dom >= high) alpha = 0;
+        else if (dom > low) {
+          const t = (dom - low) / (high - low);
+          alpha = 1 - t * t * (3 - 2 * t);
+        }
+      }
+      if (alpha <= 0.02) {
+        buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 0;
+      } else {
+        let ur = Math.max(0, Math.min(255, (r - (1 - alpha) * kr) / alpha));
+        let ug = Math.max(0, Math.min(255, (g - (1 - alpha) * kg) / alpha));
+        let ub = Math.max(0, Math.min(255, (b - (1 - alpha) * kb) / alpha));
+        const maxRB = Math.max(ur, ub);
+        if (ug > maxRB) ug = maxRB;
+        buf[i] = Math.round(ur);
+        buf[i + 1] = Math.round(ug);
+        buf[i + 2] = Math.round(ub);
+        buf[i + 3] = Math.round(alpha * 255);
+      }
     }
   }
 
@@ -467,7 +472,6 @@ async function runTransparentPack(opts) {
     extractCleanCutout(thanksSrc, { textMaxY: 0.23 }),
   ]);
 
-  // Cover 240x240 transparent PNG
   const coverOut = path.join(outputDir, "cover.png");
   const coverFitted = await sharp(coverCut.buffer)
     .resize(224, 224, { fit: "contain", kernel: "lanczos3", background: { r: 0, g: 0, b: 0, alpha: 0 } })
@@ -479,7 +483,6 @@ async function runTransparentPack(opts) {
     .toFile(coverOut);
   console.log(`cover.png: ${coverInfo.width}x${coverInfo.height}, ${(coverInfo.size / 1024).toFixed(1)}KB`);
 
-  // Icon 50x50 transparent PNG (head-only soft chin oval feather)
   const iconOut = path.join(outputDir, "icon.png");
   {
     const { data, info } = await sharp(iconCut.buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -529,7 +532,6 @@ async function runTransparentPack(opts) {
     console.log(`icon.png: ${iconInfo.width}x${iconInfo.height}, ${(iconInfo.size / 1024).toFixed(1)}KB`);
   }
 
-  // Banner 750x400 JPG (opaque, zero text)
   const pal = PALETTES[opts.palette] || PALETTES.sky;
   const bannerBg = Buffer.from(`
     <svg width="750" height="400" xmlns="http://www.w3.org/2000/svg">
@@ -572,7 +574,6 @@ async function runTransparentPack(opts) {
     .toFile(bannerOut);
   console.log(`banner.jpg: ${bannerInfo.width}x${bannerInfo.height}, ${(bannerInfo.size / 1024).toFixed(1)}KB`);
 
-  // Appreciation Guide 750x560 JPG (opaque, zero text)
   const guideBg = Buffer.from(`
     <svg width="750" height="560" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -606,7 +607,6 @@ async function runTransparentPack(opts) {
     .toFile(guideOut);
   console.log(`appreciation-guide.jpg: ${guideInfo.width}x${guideInfo.height}, ${(guideInfo.size / 1024).toFixed(1)}KB`);
 
-  // Appreciation Thanks 750x750 JPG (opaque, zero text)
   const thanksBg = Buffer.from(`
     <svg width="750" height="750" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -642,6 +642,179 @@ async function runTransparentPack(opts) {
   if (opts.qa) {
     await writeQaSheet(coverOut, iconOut, opts.qa);
   }
+}
+
+async function fileToDataUrl(filePath) {
+  const bytes = await sharp(filePath).resize(768, 768, { fit: "inside", withoutEnlargement: true }).png().toBuffer();
+  return `data:image/png;base64,${bytes.toString("base64")}`;
+}
+
+async function generateViaOpenAI({ apiKey, baseUrl, model, prompt, refPaths, size, transparent }) {
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("size", size);
+  form.append("output_format", "png");
+  if (transparent) form.append("background", "transparent");
+  for (let i = 0; i < refPaths.length; i += 1) {
+    const pngBuf = await sharp(refPaths[i]).resize(768, 768, { fit: "inside", withoutEnlargement: true }).png().toBuffer();
+    form.append("image[]", new Blob([pngBuf], { type: "image/png" }), `ref-${i + 1}.png`);
+  }
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/images/edits`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`OpenAI image API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = await res.json();
+  const item = json.data?.[0];
+  if (item?.b64_json) return Buffer.from(item.b64_json, "base64");
+  if (item?.url) {
+    const imgRes = await fetch(item.url);
+    return Buffer.from(await imgRes.arrayBuffer());
+  }
+  throw new Error("OpenAI image API returned no image data.");
+}
+
+async function generateViaOpenRouter({ apiKey, baseUrl, model, prompt, refPaths, aspectRatio }) {
+  const refUrls = await Promise.all(refPaths.map(fileToDataUrl));
+  const content = [
+    { type: "text", text: prompt },
+    ...refUrls.map((url) => ({ type: "image_url", image_url: { url } })),
+  ];
+  const body = {
+    model,
+    modalities: ["image", "text"],
+    messages: [{ role: "user", content }],
+    ...(aspectRatio ? { image_config: { aspect_ratio: aspectRatio } } : {}),
+  };
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-Title": "wx-sticker-skill",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`OpenRouter image API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = await res.json();
+  const msg = json.choices?.[0]?.message;
+  const imgUrl = msg?.images?.[0]?.image_url?.url || msg?.images?.[0]?.url;
+  if (!imgUrl) throw new Error(`OpenRouter returned no image. Response snippet: ${JSON.stringify(json).slice(0, 300)}`);
+  if (imgUrl.startsWith("data:")) {
+    const base64 = imgUrl.split(",")[1];
+    return Buffer.from(base64, "base64");
+  }
+  const imgRes = await fetch(imgUrl);
+  return Buffer.from(await imgRes.arrayBuffer());
+}
+
+/**
+ * Generate raw auxiliary images via OpenAI (OPENAI_API_KEY) or OpenRouter (OPENROUTER_API_KEY)
+ * and automatically post-process them into WeChat-compliant banner/cover/icon/appreciation files.
+ */
+async function runGeneratePack(opts) {
+  const inputDir = opts.input;
+  const outputDir = opts.output || (inputDir ? path.join(inputDir, "pack") : null);
+  if (!inputDir || !outputDir) throw new Error("Usage: build-pack.mjs generate --input <dir> --output <dir> [--theme <desc>] [--refs <f1,f2>] [--qa <path>]");
+
+  const openAiKey = process.env.OPENAI_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  if (!openAiKey && !openRouterKey) {
+    throw new Error(
+      "Missing API key. Set OPENAI_API_KEY (recommended, supports native transparent PNG) or OPENROUTER_API_KEY, or use your host agent's image tool + `build-pack.mjs chroma`.",
+    );
+  }
+  const provider = opts.provider || (openAiKey ? "openai" : "openrouter");
+  const model =
+    opts.model ||
+    process.env.WX_STICKER_IMAGE_MODEL ||
+    (provider === "openai" ? "gpt-image-1" : "google/gemini-2.5-flash-image-preview");
+  const baseUrl =
+    opts["base-url"] ||
+    process.env.WX_STICKER_IMAGE_BASE_URL ||
+    (provider === "openai" ? "https://api.openai.com/v1" : "https://openrouter.ai/api/v1");
+
+  const allFiles = listImages(inputDir);
+  const refPaths = opts.refs
+    ? String(opts.refs).split(",").map((p) => path.resolve(p.trim()))
+    : [allFiles[0], allFiles[Math.floor(allFiles.length / 2)], allFiles[allFiles.length - 1]].filter(Boolean);
+  const theme = opts.theme || "the exact same adorable main character and visual style from the reference sticker images";
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  const rawDir = path.join(outputDir, ".raw");
+  fs.mkdirSync(rawDir, { recursive: true });
+
+  await buildStickers(inputDir, path.join(outputDir, "stickers"), "auto");
+
+  const useTransparentApi = provider === "openai";
+  const bgInstruction = useTransparentApi
+    ? "Completely transparent background with zero background color, zero shadows, and zero white outline around the subject."
+    : "Completely flat, uniform, solid pure chroma-key neon green (#00FF00) background with zero gradients, zero shadows, zero white outline, and zero green elements on the subject.";
+
+  const specs = [
+    {
+      key: "cover",
+      rawFile: path.join(rawDir, "cover-raw.png"),
+      size: "1024x1024",
+      aspectRatio: "1:1",
+      transparent: useTransparentApi,
+      prompt: `Create a square 1:1 front-facing full sitting body portrait of ${theme}. Keep the ENTIRE subject completely inside the frame with ~12% empty margin on all four sides (never clipped at edges). ${bgInstruction} ZERO text, zero letters, zero watermarks.`,
+    },
+    {
+      key: "icon",
+      rawFile: path.join(rawDir, "icon-raw.png"),
+      size: "1024x1024",
+      aspectRatio: "1:1",
+      transparent: useTransparentApi,
+      prompt: `Create a square 1:1 front-facing HEAD-ONLY portrait of ${theme}, clean rounded fluffy chin/neck at bottom with NO shoulders, NO body, and NO props so it stays crystal-clear at 50x50 pixels. Centered with ~15% empty margin on all four sides. ${bgInstruction} ZERO text, zero letters, zero watermarks.`,
+    },
+    {
+      key: "banner",
+      rawFile: path.join(rawDir, "banner-raw.png"),
+      size: "1536x1024",
+      aspectRatio: "16:9",
+      transparent: false,
+      prompt: `Create a lively wide horizontal banner scene featuring ${theme} with fun signature props on a warm, vibrant pastel non-white background with strong contrast (NOT white, NOT transparent). Keep generous safe margin at the top edge. STRICTLY ZERO text, zero Chinese characters, zero English letters, zero logos, zero watermarks.`,
+    },
+    {
+      key: "guide",
+      rawFile: path.join(rawDir, "guide-raw.png"),
+      size: "1536x1024",
+      aspectRatio: "4:3",
+      transparent: false,
+      prompt: `Create a warm 4:3 cozy scene featuring ${theme} in an endearing polite "please treat me" pose on a vibrant warm pastel non-white background (NOT white, NOT transparent). STRICTLY ZERO text, zero letters, zero logos, zero watermarks.`,
+    },
+    {
+      key: "thanks",
+      rawFile: path.join(rawDir, "thanks-raw.png"),
+      size: "1024x1024",
+      aspectRatio: "1:1",
+      transparent: false,
+      prompt: `Create a warm square 1:1 joyful thank-you scene featuring ${theme} beaming happily surrounded by cute floating pink hearts and golden sparkles on a vibrant pastel blush-peach non-white background (NOT white, NOT transparent). STRICTLY ZERO text, zero letters, zero logos, zero watermarks.`,
+    },
+  ];
+
+  console.log(`Generating 5 auxiliary raw images via ${provider} (${model})...`);
+  for (const spec of specs) {
+    console.log(`- Generating ${spec.key}...`);
+    const buf =
+      provider === "openai"
+        ? await generateViaOpenAI({ apiKey: openAiKey, baseUrl, model, prompt: spec.prompt, refPaths, size: spec.size, transparent: spec.transparent })
+        : await generateViaOpenRouter({ apiKey: openRouterKey, baseUrl, model, prompt: spec.prompt, refPaths, aspectRatio: spec.aspectRatio });
+    fs.writeFileSync(spec.rawFile, buf);
+  }
+
+  await runChromaPack({
+    "cover-raw": path.join(rawDir, "cover-raw.png"),
+    "icon-raw": path.join(rawDir, "icon-raw.png"),
+    "banner-raw": path.join(rawDir, "banner-raw.png"),
+    "guide-raw": path.join(rawDir, "guide-raw.png"),
+    "thanks-raw": path.join(rawDir, "thanks-raw.png"),
+    output: outputDir,
+    qa: opts.qa,
+  });
 }
 
 async function runChromaPack(opts) {
@@ -762,13 +935,15 @@ async function main() {
     await buildStickers(opts.input, opts.output, opts.fit || "auto");
   } else if (cmd === "transparent") {
     await runTransparentPack(opts);
+  } else if (cmd === "generate") {
+    await runGeneratePack(opts);
   } else if (cmd === "chroma") {
     await runChromaPack(opts);
   } else if (cmd === "verify") {
     if (!opts.pack) throw new Error("Usage: build-pack.mjs verify --pack <dir>");
     await verifyPack(opts.pack);
   } else {
-    console.log("Usage: build-pack.mjs <stickers|transparent|chroma|verify> [options]");
+    console.log("Usage: build-pack.mjs <stickers|transparent|generate|chroma|verify> [options]");
     process.exit(cmd ? 1 : 0);
   }
 }
