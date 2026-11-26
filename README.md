@@ -1,10 +1,12 @@
 # wx-sticker-skill
 
-一个**不绑定特定客户端**的开源 Agent Skill，用于将本地表情包目录一键整理为符合**微信表情开放平台**（`sticker.weixin.qq.com`）规范的全套投稿素材，并通过任意浏览器自动化工具（Chrome DevTools MCP / Playwright MCP / 内置浏览器 Agent）自动填表、上传并检查浅色/深色模式预览。
+一个**不绑定特定客户端**的开源 Agent Skill，支持将已有九宫格离线切成 9 张 PNG，并将本地表情包目录一键整理为符合**微信表情开放平台**（`sticker.weixin.qq.com`）规范的全套投稿素材，并通过任意浏览器自动化工具（Chrome DevTools MCP / Playwright MCP / 内置浏览器 Agent）自动填表、上传并检查浅色/深色模式预览。
 
 兼容 **Claude Code**、**OpenAI Codex**、**Antigravity**、**Cursor** 以及独立命令行调用。
 
 ## 核心能力
+
+- **免费九宫格切图**：已有 3×3 大图 → 9 张独立 PNG，自动寻找分隔带，保留原始单格分辨率和透明通道；无需 API Key，可继续整理投稿素材。
 
 - **全套合规素材构建（[build-pack.mjs](skills/wechat-sticker-publish/scripts/build-pack.mjs)）**：
   - `240×240` 主图批量缩放（支持 8–24 张，自动识别透明/不透明）
@@ -27,6 +29,7 @@ wx-sticker-skill/
     └── wechat-sticker-publish/
         ├── SKILL.md                   # 跨 Agent 通用工作流说明
         ├── scripts/
+        │   ├── slice-grid.mjs         # 离线九宫格切图
         │   └── build-pack.mjs         # 缩放 / 去白边拼图 / API 生图 / 绿幕软抠图 / 规格校验
         └── references/
             └── platform-spec.md       # 微信表情开放平台实时字段、尺寸、字数与审核避坑表
@@ -48,15 +51,25 @@ npx skills add lili21/wx-sticker-skill
 
 > 帮我把 /path/to/stickers 里的表情整理成微信表情投稿素材，并填写上传页面。
 
+已有九宫格也可以直接说：
+
+> 把 /path/to/grid.png 切成 9 张独立表情 PNG，再整理成微信投稿素材。
+
+只需要切图时说“切成 9 张，不生成投稿素材”。
+
 Agent 会在首次使用时自动安装图像处理依赖、生成素材并校验；有浏览器工具时自动填表，最终提交由你确认。只需要素材时直接说“生成投稿素材，不上传”。
 
 [在 skills.sh 查看](https://skills.sh/lili21/wx-sticker-skill/wechat-sticker-publish) · [Skills CLI 文档](https://skills.sh/docs/cli)
 
 ---
 
+## 免费 Skill 与 soda
+
+免费 Skill 负责处理已有作品：切图、整理投稿素材、规格校验和辅助上传。参考照生成原创表情、重绘修改等由 **soda（汽水铺）付费服务**提供，不包含在此 Skill 内。下文的 API 生图仅用于已有表情的配套投稿图，不生成原创九宫格。
+
 ## 使用前提
 
-1. **原图目录**：包含 **8–24 张**静态图片（PNG / JPG / WebP / GIF）。
+1. **已有图片**：一张 **3×3 九宫格**，或包含 **8–24 张**静态图片的目录（PNG / JPG / WebP / GIF）。
 2. **浏览器自动填表（可选）**：
    - 启动本机 **Google Chrome** 并开启 `chrome://inspect/#remote-debugging`；
    - 在 Chrome 中微信扫码登录 `https://sticker.weixin.qq.com`（开通赞赏需账号具备艺术家/赞赏资格）；
@@ -89,6 +102,15 @@ npm install
 
 ```bash
 SCRIPT="$PWD/skills/wechat-sticker-publish/scripts/build-pack.mjs"
+
+# 0) 已有九宫格离线切成 9 张 PNG（输出目录必须尚不存在）
+node "$SCRIPT" slice \
+  --input /path/to/grid.png \
+  --output /path/to/sticker-slices
+
+# 默认自动寻找分隔带；需要严格均分时加 --mode equal
+# 查看全部切图与 slice-report.json，确认人物、文字未被切断。
+# 保留原背景，不自动去白底；透明切图可接 transparent，不透明切图走照片模式。
 
 # 1) 透明底 PNG 贴纸目录：离线一键出全套素材 + 浅/深色质检图
 node "$SCRIPT" transparent \

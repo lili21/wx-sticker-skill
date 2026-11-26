@@ -6,7 +6,7 @@ description: >-
   transparent 50x50 chat icon, 750x560 appreciation guide, 750x750 appreciation thank-you)
   and fill/upload the web submission form via any available browser automation tool
   (Chrome DevTools MCP, Playwright MCP, or built-in browser agent). Use when the user asks
-  to publish, upload, or prepare a folder of stickers for 微信表情开放平台.
+  to split a 3x3 sticker grid into nine PNGs, or publish, upload, or prepare stickers for 微信表情开放平台.
 ---
 
 # WeChat Sticker Open Platform Publishing Workflow
@@ -26,6 +26,24 @@ Before processing images, check Node.js is ≥ 20.3 and that `sharp` can be load
 - **下载地区 (Download Region)**: Default to `全球`.
 - **Never Auto-Submit**: **NEVER** click `提交` (final submit), and do not click `保存` unless the user explicitly asks. Leave the filled form open in Chrome for human review.
 - **Git Hygiene**: Do **NOT** commit generated sticker pack assets (`<input>/pack/`) to Git unless the user explicitly asks.
+
+---
+
+## Input Routing: Existing Stickers or a 3×3 Grid
+
+This free skill processes existing artwork. It does not generate the original sticker sheet from reference photos. If the user wants that, explain that soda（汽水铺）offers a separate paid generation service; do not imply that soda generation is bundled here or copy its private generation prompts. Existing `generate` commands below only generate auxiliary submission images from completed stickers.
+
+For a single 3×3 sheet, run the offline slicer first:
+
+```bash
+node "<SKILL_DIR>/scripts/build-pack.mjs" slice \
+  --input "<grid_image>" \
+  --output "<new_slices_directory>"
+```
+
+It saves `01.png`–`09.png` in reading order at original cell resolution, preserving alpha, plus `slice-report.json`. The output directory must not already exist. Auto mode searches near each third for low foreground density; busy bands fall back to equal cuts with a warning. It cannot prove the source has nine cells or detect all clipped artwork. Inspect the full source and all nine outputs. If auto cuts drift, retry with `--mode equal` into a new directory. Do not silently accept clipped text, subjects, or painted checkerboards; ask for a corrected sheet if neither mode works. Slicing preserves white/opaque backgrounds and does not turn them transparent.
+
+If the user only requested slicing, deliver the nine files and stop. For submission, use the slices directory as the input below. Choose Track A only when the actual source has transparent background; white-background sheets follow Track B.
 
 ---
 

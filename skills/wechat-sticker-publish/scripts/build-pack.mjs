@@ -3,6 +3,7 @@
  * WeChat Sticker Open Platform Pack Builder & Verifier (Agent-Agnostic CLI)
  *
  * Subcommands:
+ *   slice        Split a 3×3 grid into 9 original-resolution PNGs (offline)
  *   stickers     Resize 8-24 source images to 240x240 PNG (auto contain/cover)
  *   transparent  Build complete pack from transparent RGBA PNG stickers (de-text, de-border, compose)
  *   generate     Generate raw auxiliary images via OpenAI or OpenRouter API (for opaque photo packs)
@@ -13,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { sliceGrid } from "./slice-grid.mjs";
 
 const IMAGE_RE = /\.(png|jpe?g|webp|gif)$/i;
 
@@ -930,7 +932,9 @@ async function verifyPack(packDir) {
 
 async function main() {
   const { cmd, opts } = parseArgs(process.argv.slice(2));
-  if (cmd === "stickers") {
+  if (cmd === "slice") {
+    await sliceGrid(opts);
+  } else if (cmd === "stickers") {
     if (!opts.input || !opts.output) throw new Error("Usage: build-pack.mjs stickers --input <dir> --output <dir> [--fit auto|contain|cover]");
     await buildStickers(opts.input, opts.output, opts.fit || "auto");
   } else if (cmd === "transparent") {
@@ -943,7 +947,7 @@ async function main() {
     if (!opts.pack) throw new Error("Usage: build-pack.mjs verify --pack <dir>");
     await verifyPack(opts.pack);
   } else {
-    console.log("Usage: build-pack.mjs <stickers|transparent|generate|chroma|verify> [options]");
+    console.log("Usage: build-pack.mjs <slice|stickers|transparent|generate|chroma|verify> [options]");
     process.exit(cmd ? 1 : 0);
   }
 }
