@@ -1,0 +1,12 @@
+{
+  "name": "wechat-sticker-publish",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.3.0"
+  },
+  "dependencies": {
+    "sharp": "^0.34.5"
+  }
+}

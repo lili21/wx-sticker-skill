@@ -15,7 +15,9 @@ Agent-agnostic runbook compatible with **Claude Code**, **Codex**, **Antigravity
 
 For exact live form fields, dropdown values, pixel sizes, and review rejection points, read [references/platform-spec.md](./references/platform-spec.md).
 
-All image processing scripts live in [scripts/build-pack.mjs](./scripts/build-pack.mjs) relative to this skill directory (denoted `<SKILL_DIR>` below). Make sure `npm install` has been run once in the repository root so `sharp` is available.
+All image processing scripts live in [scripts/build-pack.mjs](./scripts/build-pack.mjs) relative to this skill directory (denoted `<SKILL_DIR>` below). The installed skill is self-contained; no repository checkout is needed.
+
+Before processing images, check Node.js is ≥ 20.3 and that `sharp` can be loaded from the skill directory. If dependencies are missing, run `npm ci --prefix "<SKILL_DIR>" --no-audit --no-fund` yourself, then continue the requested workflow. Do not ask the user to clone the repository, create symlinks, or install dependencies manually. If installation fails, report the actual error and stop processing until resolved. Resolve `<SKILL_DIR>` to the directory containing this SKILL.md, and quote its absolute path in shell commands.
 
 ## Default Preferences (Apply Unless User Overrides)
 

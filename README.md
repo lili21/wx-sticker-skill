@@ -34,51 +34,23 @@ wx-sticker-skill/
 
 ---
 
-## 安装指南
+## 一条命令安装
 
-先克隆仓库并安装唯一依赖 `sharp`（需要 Node.js ≥ 18）：
-
-```bash
-git clone git@github.com:lili21/wx-sticker-skill.git ~/projects/wx-sticker-skill
-cd ~/projects/wx-sticker-skill
-npm install
-```
-
-然后按你使用的 Coding Agent 完成注册：
-
-### 1. Claude Code
-
-将 Skill 软链接到全局 `~/.claude/skills/`（或项目内 `.claude/skills/`）：
+需要 Node.js ≥ 20.3（sharp 运行要求）。在终端运行：
 
 ```bash
-mkdir -p ~/.claude/skills
-ln -s ~/projects/wx-sticker-skill/skills/wechat-sticker-publish ~/.claude/skills/wechat-sticker-publish
+npx skills add lili21/wx-sticker-skill
 ```
 
-> 自动填表需在 Claude Code 配置 Chrome DevTools MCP 或 Playwright MCP（推荐连接已登录微信表情开放平台的本机 Chrome）。
+按提示选择使用的 Agent 和安装范围即可，支持 Claude Code、Codex、Cursor、Antigravity 等。无需克隆仓库或手动创建软链接。
 
-### 2. OpenAI Codex
+安装后，在 Agent 中直接说：
 
-将 Skill 软链接到 `~/.agents/skills/`（或 `~/.codex/skills/`）：
+> 帮我把 /path/to/stickers 里的表情整理成微信表情投稿素材，并填写上传页面。
 
-```bash
-mkdir -p ~/.agents/skills
-ln -s ~/projects/wx-sticker-skill/skills/wechat-sticker-publish ~/.agents/skills/wechat-sticker-publish
-```
+Agent 会在首次使用时自动安装图像处理依赖、生成素材并校验；有浏览器工具时自动填表，最终提交由你确认。只需要素材时直接说“生成投稿素材，不上传”。
 
-### 3. Antigravity
-
-在 `~/.gemini/config/skills.json` 注册：
-
-```json
-{
-  "entries": [
-    { "path": "~/projects/wx-sticker-skill/skills" }
-  ]
-}
-```
-
-对话时附带 `/browser` 即可启用浏览器自动填表。
+[在 skills.sh 查看](https://skills.sh/lili21/wx-sticker-skill/wechat-sticker-publish) · [Skills CLI 文档](https://skills.sh/docs/cli)
 
 ---
 
@@ -105,10 +77,18 @@ export WX_STICKER_IMAGE_BASE_URL="..."             # 可选，自定义兼容端
 
 ## 独立 CLI 用法
 
-不依赖任何 Agent 也可以直接在终端运行：
+如需独立运行 CLI，先克隆仓库并安装依赖（Agent 用户无需执行）：
 
 ```bash
-SCRIPT=~/projects/wx-sticker-skill/skills/wechat-sticker-publish/scripts/build-pack.mjs
+git clone https://github.com/lili21/wx-sticker-skill.git
+cd wx-sticker-skill
+npm install
+```
+
+然后在终端运行：
+
+```bash
+SCRIPT="$PWD/skills/wechat-sticker-publish/scripts/build-pack.mjs"
 
 # 1) 透明底 PNG 贴纸目录：离线一键出全套素材 + 浅/深色质检图
 node "$SCRIPT" transparent \
